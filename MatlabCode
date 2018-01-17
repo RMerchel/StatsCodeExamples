@@ -1,0 +1,340 @@
+%% Oscilloscope CSV File Analysis
+% created by: Renée Merchel
+% last edited: 11/15/2017 (by Renée Merchel)
+
+clearvars;
+%clc;
+close all;
+           
+    %% Section 1 - Load Files
+% ~~~!!! Assign Generator Frequency !!!~~~
+f=400*10^3; %Hz, frequency of generator (Research box=400kHz, FT/LS=472kHz, FT10=434kHz)
+if f==400*10^3;
+    disp('You are set to Research Box')
+elseif f==472*10^3;
+    disp('You are set to Force Triad')
+elseif f==434*10^3;
+    disp('You are set to FT10')
+else
+    disp('Check frequency setting')
+end
+
+    % Load CH1 file (Time and Current)
+        [fnam1,pnam1] = uigetfile('*.csv'); %Open file browser ('*.csv' or '*.dat')
+        filename1 = fullfile(pnam1, fnam1); %Load file name and folder location
+            disp(['Loading ' num2str(fnam1) ' ...'])
+        data1 = csvread(filename1,0,3); %Read CSV file into MatLab
+         
+    % Load CH2 file (Voltage)
+        [fnam2,pnam2] = uigetfile('*.csv'); %Open file browser
+        filename2 = fullfile(pnam2, fnam2); %Load file name and folder location
+            disp(['Loading ' num2str(fnam2) ' ...'])
+        data2 = csvread(filename2,0,4); %Read CSV file into MatLab
+        
+        data(isinf(data1)) = 0;  % set all "inf" to 0
+        data(isinf(data2)) = 0;  % set all "inf" to 0
+        time_vector = data1(:,1); %Define time data
+        V_vector = data2(:,1);  
+        I_vector = data1(:,2);
+            
+clearvars data1 data2 data; %Clean out unneeded variables
+
+    %% Section 2 - Data Manipulation
+    disp('Manipulating data ...')
+
+%RMS data manipulation:          
+    % Remove intro data
+    raw_intro = find(V_vector > 35,1,'first');
+    T_sns = time_vector(raw_intro:end) - time_vector(raw_intro);
+    I_sns = I_vector(raw_intro:end);
+    V_sns = V_vector(raw_intro:end);
+
+%clearvars time_vector I_vector V_vector raw_intro; %Clean out unneeded variables
+    
+    % Calculate RMS vectors
+        samp = 1000; 
+    % allocate arrays
+        V_rms=zeros(floor(length(V_sns)/samp)-1,1);
+        I_rms=zeros(floor(length(V_sns)/samp)-1,1);
+        T_rms=zeros(floor(length(V_sns)/samp)-1,1);
+    for i = 1:(floor(length(V_sns)/samp)-1)
+        ii = samp*i;
+        V_rms(i) = sqrt(mean(V_sns(ii:ii+(samp-1)).^2));
+        I_rms(i) = sqrt(mean(I_sns(ii:ii+(samp-1)).^2));
+        T_rms(i) = T_sns(ii);
+    end
+        
+    % Remove ending data
+    rms_end = find(V_rms(floor(length(V_rms)/2):length(V_rms)) < 10,1)-10+floor(length(V_rms)/2);
+    T_rms = T_rms(1:rms_end);
+    V_rms = V_rms(1:rms_end);
+    I_rms = I_rms(1:rms_end);
+    pwr = V_rms .* I_rms; %Define power data
+    resist = V_rms ./ I_rms; %Define resistance data
+    
+    % Calculate energy over time
+    e=zeros(length(T_rms)-1,1);
+    for i=1:length(T_rms)-1
+    e(i) = pwr(i)*(T_rms(i+1)-T_rms(i));
+    end
+    energy = sum(e); %Define total energy [J]
+    e05 = find(T_rms > 0.5,1);
+    e1 = find(T_rms > 1,1);
+    energy05 = sum(e(1:e05));
+    energy1 = sum(e(1:e1));
+    
+    sns_end = find(T_sns > T_rms(rms_end),1,'first');
+    T_sns = T_sns(1:sns_end);
+    V_sns = V_sns(1:sns_end);
+    I_sns = I_sns(1:sns_end);
+
+%Raw data manipulation:         
+    w=2*pi*f; %1/sec, angular frequency
+    T=1/f; %sec, period
+
+    %Determine the number of samples for 2 periods
+    start_ind=find(T_sns > 1,1,'first');
+    finish_ind=find(T_sns > (1+2*T),1,'first');
+    ind=T_sns(start_ind:finish_ind);
+    length_ind=length(ind);
+
+    %Specify Resolution of Graphs  ~~~!!! Change as needed !!!~~~
+    h=10*10^3; %Larger # -> lower resolution
+     % allocate arrays 
+       phi=zeros(floor((length(T_sns)-length_ind)/h),1);
+       Imped=zeros(floor((length(T_sns)-length_ind)/h),1);
+       time_deg=zeros(floor((length(T_sns)-length_ind)/h),1);
+       Crest_pk=zeros(floor((length(T_sns)-length_ind)/h),1);
+
+       ii=1; %New vector indices   
+    for i = 1:h:(floor(length(T_sns)-length_ind))
+       ind2=i+length_ind;
+
+        %Phase angle (degrees)=inverse cos(scalar product/product of Euclidean norms)
+        phi(ii)=-acos(dot(V_sns(i:ind2),I_sns(i:ind2))/(norm(V_sns(i:ind2))*...
+            norm(I_sns(i:ind2))))*360/(2*pi); 
+
+        Vp=max(V_sns(i:ind2));
+        Ip=max(I_sns(i:ind2));
+        Vphasor=Vp*exp(j*0);
+        Iphasor=Ip*exp(j*(-phi(ii)));
+        Z=Vphasor/Iphasor;
+
+        Imped(ii)=abs(Z); %Record impedance
+        time_deg(ii)=T_sns(i); %Record associated time
+        Crest_pk(ii)=Vp; %Record peak V for crest factor calculation
+
+        ii=ii+1;
+    end        
+
+        %Calculate crest factor
+        Crest_rms=zeros(length(Crest_pk),1);
+        
+     for i=1:length(Crest_pk)
+         Crest_rms(i)=V_rms(find(T_rms > time_deg(i),1,'first'));
+     end
+     
+     Crest=Crest_pk./Crest_rms;
+     
+        %Smooth lines
+        k=10; %~~~~Change filter rate as needed~~~~
+        b=(1/k)*ones(1,k);
+        Imped2=filter(b,1,Imped);
+        phi2=filter(b,1,phi);
+        Crest2=filter(b,1,Crest);
+        k2=100;
+        b2=(1/k2)*ones(1,k2);
+        e2=filter(b2,1,e);
+
+        
+    %% Section 3 - Plot Data
+    disp('Creating plots ...')
+
+    % Plot by Time
+        %Set figure 1 size
+            figure('units','normalized','position',[.1 .1 .8 .8]) 
+        %Create subplots
+            plot1 = subplot(3,2,1);
+            plot2 = subplot(3,2,2);
+            plot3 = subplot(3,2,3);
+            plot4 = subplot(3,2,4);
+            plot5 = subplot(3,2,5);
+            plot6 = subplot(3,2,6);
+        %Plot the RMS Voltage
+            plot(plot1,T_rms,V_rms,'b') 
+            xlabel(plot1,'Time (s)')
+            ylabel(plot1,'RMS Voltage (V)')
+            axis(plot1,[0 inf 0 inf])
+        %Plot the RMS Current
+            plot(plot2,T_rms,I_rms,'g')
+            xlabel(plot2,'Time (s)')
+            ylabel(plot2,'RMS Current (A)')
+            axis(plot2,[0 inf 0 inf])
+        %Plot the RMS Power
+            plot(plot3,T_rms,pwr,'c')
+            xlabel(plot3,'Time (s)')
+            ylabel(plot3,'RMS Power (W)')
+            axis(plot3,[0 inf 0 inf])
+        %Plot the RMS Resistance
+            plot(plot4,T_rms,resist,'r')
+            xlabel(plot4,'Time (s)')
+            ylabel(plot4,'Resistance (Ohm)')
+            axis(plot4,[0 inf 0 inf])
+        %Plot Imped
+            plot(plot5,time_deg,Imped2,'k') 
+            xlabel(plot5,'Time (s)')
+            ylabel(plot5,'Impedance (Ohm)')
+            axis(plot5,[0 inf 0 inf])
+        %Plot phi
+            plot(plot6,time_deg,phi2,'m') 
+            xlabel(plot6,'Time (s)')
+            ylabel(plot6,'Phase Shift (deg)')
+            xlim(plot6,[0 inf])
+            set(plot6,'Ydir','reverse')
+
+    
+%     % Plot by Resistance
+%         %Sort data by resist
+%             D = [resist,V_rms,I_rms,pwr,T_rms]; %create matrix
+%             D_sort = sortrows(D,1);
+%                 R_sort=D_sort(:,1);
+%                 V_sort=D_sort(:,2);
+%                 I_sort=D_sort(:,3);
+%                 P_sort=D_sort(:,4);
+%         %Smooth lines
+%             k=100; %~~~~Change filter rate as needed~~~~
+%             b=(1/k)*ones(1,k);
+%             R_sort=filter(b,1,R_sort);
+%             V_sort=filter(b,1,V_sort);
+%             I_sort=filter(b,1,I_sort);
+%             P_sort=filter(b,1,P_sort);
+%         %Set figure 2 size
+%             figure('units','normalized','position',[.1 .1 .8 .8]) 
+%         %Create 3 variable plot with theoretical reference lines
+%             [AX,H1,H2]=plotyy([R_sort,R_sort],[V_sort,P_sort],R_sort,I_sort); 
+%                 title('Oscilloscope Output')
+%                 xlabel('Resistance (Ohms)')
+%                 ylabel(AX(1),'Voltage (V), Power (W)')
+%                 ylabel(AX(2),'Current (A)')
+%                 set(AX(1),{'xcolor','ycolor','YLim','YTick'},{'r','b',[0 inf],0:25:500});
+%                 set(AX(2),{'xcolor','Ylim','ycolor','YTick'},{'r',[0 inf],[0 .7 0],0:0.25:5});
+%                 set(H1(1),{'color','LineWidth'},{'b',2});
+%                 set(H1(2),{'color','LineWidth'},{'k',2});
+%                 set(H2,{'color','LineWidth'},{[0 .7 0],2});
+%                 legend({'I_r_m_s','V_r_m_s','P_r_m_s'})
+            
+    
+    %% Section 4 - Calculate Values
+%     disp(' ')
+%     disp(['Activation Duration = ' num2str(round(T_sns(length(T_sns))*10)/10) ' s'])
+%     disp(' ')
+%     disp(['Maximum RMS Voltage = ' num2str(max(V_rms)) ' V'])
+%     disp(['Peak Voltage = ' num2str(max(abs(V_sns))) ' V'])
+%     disp(' ')
+%     disp(['Initial RMS Current = ' num2str(I_rms(20)) ' A'])
+%     disp(['Maximum RMS Current = ' num2str(max(I_rms)) ' A'])
+   Ipeak = find(I_rms == max(I_rms),1);
+%     disp(['Time at maximum RMS Current = ' num2str(T_rms(Ipeak)) ' s'])    
+   I_thresh = find(I_rms(Ipeak:length(I_rms)) < 0.2,1,'first')+Ipeak;
+%     disp(['Time at RMS Current < 200 mA = ' num2str(T_rms(I_thresh)) ' s'])    
+%     disp(' ')
+%     disp(['Final RMS Current = ' num2str(I_rms(length(I_rms)-20)) ' s'])    
+%     disp(' ')
+%     disp(['Maximum power = ' num2str(max(pwr)) ' W'])
+   peak = find(pwr == max(pwr),1);
+%     disp(['Time at maximum power = ' num2str(T_rms(peak)) ' s'])
+%     disp(' ')
+%     disp(['Initial resistance = ' num2str(resist(20)) ' Ohms'])
+%     disp(['Minimum resistance = ' num2str(min(resist)) ' Ohms'])
+%     disp(['Maximum resistance = ' num2str(max(resist)) ' Ohms'])
+%     disp(['Final resistance = ' num2str(resist(length(resist)-20)) ' Ohms'])
+%     disp(' ')
+%     disp(['Initial impedance = ' num2str(Imped(5)) ' Ohms'])
+%     disp(['Minimum impedance = ' num2str(min(Imped)) ' Ohms'])
+   min_imp = find(Imped == min(Imped),1);
+%     disp(['Time at minimum impedance = ' num2str(time_deg(min_imp)) ' s'])   
+%     disp(['Maximum impedance = ' num2str(max(Imped)) ' Ohms'])
+%     disp(['Final impedance = ' num2str(Imped(length(Imped)-5)) ' Ohms'])
+%     disp(' ')
+%     disp(['Initial phase shift = ' num2str(phi(5)) ' Degrees'])
+%     disp(['Smallest phase shift = ' num2str(-min(abs(phi))) ' Degrees'])
+%     disp(['Largest phase shift = ' num2str(-max(abs(phi))) ' Degrees'])
+   phi_peak = find(phi == max(phi),1);
+   phi_thresh = find(phi(phi_peak:length(phi)) < -50,1,'first')+phi_peak;
+%     disp(['Time at -50 degree phase shift = ' num2str(time_deg(phi_thresh)) ' s'])
+%     disp(['Final phase shift = ' num2str(phi(length(phi)-5)) ' Degrees'])
+%     disp(' ')
+%     disp(['Median crest factor = ' num2str(median(Crest))])
+%     disp(' ')
+%     disp(['Total energy = ' num2str(energy) ' J'])
+%     disp(['Energy in first 0.5s = ' num2str(energy05) ' J'])
+%     disp(['Energy in first 1.0s = ' num2str(energy1) ' J'])
+%     disp(' ')
+    
+ %Copyable format (same order as above):
+    disp(num2str(round(T_sns(length(T_sns))*10)/10))
+    disp(num2str(max(V_rms)))
+    disp(num2str(max(abs(V_sns))))
+    disp(num2str(I_rms(20)))
+    disp(num2str(max(I_rms)))
+    disp(num2str(T_rms(Ipeak)))    
+    disp(num2str(T_rms(I_thresh)))  
+    disp(num2str(I_rms(length(I_rms)-20)))
+    disp(num2str(max(pwr)))
+    disp(num2str(T_rms(peak)))
+    disp(num2str(resist(20)))
+    disp(num2str(min(resist)))
+    disp(num2str(max(resist)))
+    disp(num2str(resist(length(resist)-20)))
+    disp(num2str(Imped(5)))
+    disp(num2str(min(Imped)))
+    disp(num2str(time_deg(min_imp)))   
+    disp(num2str(max(Imped)))
+    disp(num2str(Imped(length(Imped)-5)))
+    disp(num2str(phi(5)))
+    disp(num2str(-min(abs(phi))))
+    disp(num2str(-max(abs(phi))))
+    disp(num2str(time_deg(phi_thresh)))
+    disp(num2str(phi(length(phi)-5)))
+    disp(num2str(median(Crest)))
+    disp(num2str(energy))
+    disp(num2str(energy05))
+    disp(num2str(energy1))
+
+    
+    
+%% Section 5 - Troubleshooting
+%     %Phase Angles at Specific Times
+%     phase_t1 = find(T_sns > 1,1,'first');
+%     x1 = T_sns(phase_t1:phase_t1+length_ind);
+%     a1 = I_sns(phase_t1:phase_t1+length_ind);
+%     b1 = V_sns(phase_t1:phase_t1+length_ind);
+%     y_rad1=acos(dot(a1,b1)/(norm(a1)*norm(b1)));
+%     y_deg1=y_rad1*360/(2*pi);
+%     figure
+%     [AX,H1,H2]=plotyy(x1,a1,x1,b1); 
+%         set(H1,{'color','LineWidth'},{[0 .7 0],2});
+%         set(H2,{'color','LineWidth'},{'b',2});
+%         set(AX(1),'ycolor',[0 .7 0]);
+%         set(AX(2),'ycolor','b');
+%     xlabel(['Angle in degrees is: ',num2str(y_deg1)],'Color','r')
+%     grid on;
+
+%     %Plot the crest factor over time
+%     figure
+%     plot(time_deg,Crest2)
+%     title(['Median Crest Factor = ',num2str(median(Crest))],'Color','b')
+%     xlabel('Time (s)')
+%     ylabel('Crest Factor')
+    
+
+%% Section 6 - Export Data
+T = [T_rms(1:length(T_rms)-1),e,e2,I_rms(1:length(I_rms)-1),V_rms(1:length(V_rms)-1)]; %time, energy, smoothed energy, rms current, rms voltage
+filename = ['R:\Research & Development\Personnel\RMerchel\RFVS\Algorithm Development\October 2017 Coated Jaw Data\Data Output\' num2str(fnam1(1:length(fnam1)-3)) 'csv'];
+csvwrite(filename,T);
+
+
+
+
+
+
